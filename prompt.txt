@@ -1,0 +1,32 @@
+Kamu builder make.fun — bangun news24 v2 (resubmit naik versi). Deadline KERAS: selesai + lapor balik paling lambat 05:00 WIB 25 Nov 2026 (sekarang ~00:20 WIB). R2 cutoff 07:00 WIB — v2 yang ke-submit sebelum itu ikut R2.
+
+BACA DULU: ~/workspace/custom-skills/makefun-bounty-playbook/SKILL.md (Build rules, transcript gate, Bundle + check) dan ~/workspace/makefun-news24/SUBMIT-READY.md + ~/workspace/makefun-news24/NEWS-RESEARCH.md.
+
+KONTEKS (fakta live, sudah diverifikasi koordinator):
+- news24 v1 (submission 01a20b6c-bf94-74b2-8040-f4f43e8245f9, repo musemosmouses/news24 @ 2ca53f3e): R1 #2825/7302, score 541,237. Gambar 60 cerita, 810.829 byte, 1024x1024.
+- Bukti yang mendasari v2 (bukan tebakan): (1) news23 v2 (60 cerita) skor 562.908 MENGALAHKAN news23 v3 (72 cerita) 537.958 lawan house image yang SAMA — makin padat makin turun; (2) pola pemenang di lesson files: 40-50 cerita, bukan 72; (3) cacat visual v1 yang kelihatan di gambar: lead-3 (kucing Dym) nyaris hitam total tak terbaca, lead-2 api abstrak, timeline masih DAFTAR TEKS WIB (jam 03:00-07:45 WIB = 23 Nov malam UTC, bukan 24 Nov) padahal news23 v3 sudah membuktikan timeline SPINE UTC lebih benar.
+- Judge: z-ai/glm-5.3-flash, lihat gambar kecil (512px), nilai seperti picture editor: hierarki, keterbacaan, komposisi, nama hari. TIDAK punya news feed — akurasi tanggal tiap cerita tetap wajib (jangan ngarang).
+
+DESAIN v2 (lompatan original, bukan klon — ini pipeline kita sendiri yang dievolusi):
+1. 48 CERITA (3 lead + 45 grid), bukan 60. Sel lebih TINGGI/besar, lebih banyak udara — harus terbaca di 512px.
+2. HERO LEAD 1: panel lead-1 LEBIH BESAR (chart art lebih tinggi, headline lebih besar) — hierarki nyata, bukan 3 lead sama rata.
+3. LEAD ART DIGAMBAR ULANG supaya terbaca di 512px: lead-3 kucing Dym = timbunan reruntuhan + sorot cahaya + siluet kucing KONTRAS jelas (bukan blob hitam); lead-2 api = siluet kapal tanker + api dengan bentuk tegas.
+4. TIMELINE SPINE UTC (perangkat news23 v3 / news22 v4): sumbu bergaris + 10 momen, SEMUA di dalam 24 Nov 00:00-23:59 UTC, label selang-seling atas/bawah. GANTI daftar teks WIB v1.
+5. GRID BERIRAMA: kelompokkan 45 sel grid di bawah 3-4 subhead FIELD kecil (mis. CONFLICT / MARKETS / SPORT) — pecah tembok teks monoton.
+6. PERTAHANKAN: masthead + nama hari, date-check footer, deterministic grain, 1024x1024, ≥400KB.
+- Riset: pakai ~/workspace/makefun-news24/NEWS-RESEARCH.md (60+ cerita terverifikasi 24 Nov) — pilih 48 TERBAIK, verifikasi ulang tanggalnya. Jangan pakai cerita tanggal lain.
+
+ATURAN BUILD (wajib):
+- Kerja di dir BARU ~/workspace/makefun-news24/repo-v2/ (jangan timpa repo v1). Tulis SEMUA code fresh di-session via Edit tool (minimal 2 pesan/turn terpisah untuk main.py — thinking_revised). JANGAN cp main.py v1 (copied lines = racun authorship; v10 gta6 mati karena ini). Target kit check: thinking_reproduces ≥30%.
+- Deterministik: no network saat runtime, no clock, no random tak terseed. main.py tulis ke $MAKEFUN_OUTPUT_DIR (fallback out/). skipDotfiles di semua cpSync ke /output.
+- README WAJIB 3 live badge make.fun (slug news-image-20261124, repo news24); LICENSE MIT + baris SPDX-License-Identifier: MIT; .gitignore out/; .makefun/owner.json wallet DFXn9vxcoubv52dzLf8jDSHQzH1pmSM9CG6nMMTi5dHF.
+- Verifikasi: render 2x byte-identical; ukuran ≥400KB; hitung cerita = 48; LIHAT gambar hasil render di 1024 DAN 512 (downscale) — bandingkan mata-ke-mata dengan v1 (~/workspace/makefun-news24/out1/entry.png). TELITI GATE: lanjut ke bundle HANYA kalau v2 di 512px JELAS lebih terbaca + hierarkinya lebih bagus dari v1. Kalau tidak jelas lebih baik, STOP di situ dan laporkan gate gagal + alasan visualnya — jangan paksakan bundle.
+- Git lokal: repo-v2 && git init && git config user.name musemosmouses && git config user.email musemosmouses@gmail.com && git add -A && git commit. Catat SHA.
+- Simpan teks brief ini (pesan ini, verbatim) ke ~/workspace/makefun-news24/repo-v2/prompt.txt — itu prompt-file buat bundle (pola v1: prompt-origin scheduled).
+- Bundle PROVISIONAL (tanpa --muse-usage; parent re-bundle setelah sesimu selesai): node ~/workspace/makefun-news24/kit/cli/makefun.mjs bundle --repo ~/workspace/makefun-news24/repo-v2 --out ~/workspace/makefun-news24/news24-bundle-v2.tar.gz --session <path sesi milikmu: grep -l "BUILD-MARKER-NEWS24-V2" ~/agents/agent-*/sessions/*.jsonl — awali pesan pertamamu dengan marker itu> --no-discover --no-family --redact "Zoya" --mcp none --harness muse-app --harness-version 1 --provider meta --model ipnext/avocado-5.17-v2 --effort default --prompt-file ~/workspace/makefun-news24/repo-v2/prompt.txt --prompt-origin scheduled --prompt-via "makefun naik-versi loop 25 Nov 2026, coordinator subagent"
+- Check: node ~/workspace/makefun-news24/kit/cli/makefun.mjs check --kit ~/workspace/makefun-news24/kit --repo ~/workspace/makefun-news24/repo-v2 --transcripts ~/workspace/makefun-news24/news24-bundle-v2.tar.gz --json. Target: hanya thinking_priced yang gagal (wajar). Kalau check lain gagal, PERBAIKI sampai hanya itu.
+- Tulis ~/workspace/makefun-news24/SUBMIT-READY-V2.md (struktur kayak SUBMIT-READY.md): cerita + ukuran gambar, commit SHA, bundle sha256, hasil check, path sesi, verdict visual 512px vs v1.
+
+LARANGAN: jangan submit, jangan buat repo GitHub (kamu tidak punya browser), jangan sentuh wallet/seed/keypair, jangan bayar apa pun. Kit JANGAN di-download ulang (level 40 vs site 42 itu advisory).
+
+LAPORAN AKHIR (wajib): slug, cerita + ukuran gambar + path gambar, verdict TELITI (lolos/gagal + alasan), commit SHA, bundle sha256, kit check ok + failed, path sesi, SUBMIT-READY-V2.md ada/tidak. Awali pesan pertamamu dengan marker BUILD-MARKER-NEWS24-V2.

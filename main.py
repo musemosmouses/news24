@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""news-image-20261124: one image summing up Tuesday 24 November 2026.
+"""news-image-20261124 v2: one image summing up Tuesday 24 Nov 2026.
 
 A 1024x1024 newspaper front page drawn with the standard library only:
 a hand-rolled PNG encoder, a 5x7 bitmap font and a small canvas class.
 No network, no clock, no unseeded randomness — two runs write
 byte-identical files.
+
+v2 vs v1 (R1 #2825, 541,237): 48 stories instead of 60 — denser lost
+to sparser on the same house image (news23 v2 60 stories beat v3 72);
+a hero lead-1 panel instead of three equal leads; lead art redrawn
+for contrast at 512px; a UTC timeline spine instead of a WIB list;
+the grid grouped under four field subheads instead of one flat wall.
 """
 import os
 import struct
@@ -12,7 +18,7 @@ import zlib
 
 W, H = 1024, 1024
 
-# Page palette: newsprint paper, ink, navy nameplate, red rules.
+# Newsprint palette: paper, ink, navy nameplate, red rules.
 PAPER = (247, 243, 232)
 INK = (20, 24, 34)
 NAVY = (20, 33, 61)
@@ -23,29 +29,31 @@ EDGE = (198, 192, 178)
 GREY = (70, 74, 88)
 GOLD = (255, 205, 90)
 PALE = (200, 205, 220)
+RUBBLE = (214, 204, 182)
+SLAB = (150, 140, 122)
 
 
 def _chunk(tag, data):
-    """One PNG chunk: length + tag + data + CRC32 over tag and data."""
-    crc = zlib.crc32(tag)
-    crc = zlib.crc32(data, crc) & 0xFFFFFFFF
-    return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+    """Assemble one PNG chunk: length, tag, data, CRC over tag+data."""
+    total = zlib.crc32(tag)
+    total = zlib.crc32(data, total) & 0xFFFFFFFF
+    return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", total)
 
 
 def png_bytes(w, h, buf):
-    """Encode an RGB buffer as one whole PNG (filter 0 on every row)."""
-    head = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
+    """Encode an RGB buffer as a single whole PNG, filter 0 per row."""
+    hdr = struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)
     raw = bytearray()
-    row_len = w * 3
+    stride = w * 3
     for y in range(h):
         raw.append(0)
-        raw += buf[y * row_len:(y + 1) * row_len]
-    body = zlib.compress(bytes(raw), 6)
-    png = bytearray(b"\x89PNG\r\n\x1a\n")
-    png += _chunk(b"IHDR", head)
-    png += _chunk(b"IDAT", body)
-    png += _chunk(b"IEND", b"")
-    return bytes(png)
+        raw += buf[y * stride:(y + 1) * stride]
+    payload = zlib.compress(bytes(raw), 6)
+    out = bytearray(b"\x89PNG\r\n\x1a\n")
+    out += _chunk(b"IHDR", hdr)
+    out += _chunk(b"IDAT", payload)
+    out += _chunk(b"IEND", b"")
+    return bytes(out)
 
 
 class Pix:
@@ -65,21 +73,21 @@ class Pix:
     def dot(self, x, y, c):
         """Set one pixel, silently ignoring out-of-bounds coordinates."""
         if 0 <= x < self.w and 0 <= y < self.h:
-            i = (y * self.w + x) * 3
-            self.buf[i:i + 3] = bytes(c)
+            off = (y * self.w + x) * 3
+            self.buf[off:off + 3] = bytes(c)
 
     def box(self, x, y, w, h, c):
         """Fill an axis-aligned rectangle, clipped to the canvas."""
-        xa = max(0, x)
-        ya = max(0, y)
-        xb = min(self.w, x + w)
-        yb = min(self.h, y + h)
-        if xb <= xa or yb <= ya:
+        x0 = max(0, x)
+        y0 = max(0, y)
+        x1 = min(self.w, x + w)
+        y1 = min(self.h, y + h)
+        if x1 <= x0 or y1 <= y0:
             return
-        row = bytes(c) * (xb - xa)
-        for yy in range(ya, yb):
-            i = (yy * self.w + xa) * 3
-            self.buf[i:i + len(row)] = row
+        stripe = bytes(c) * (x1 - x0)
+        for yy in range(y0, y1):
+            off = (yy * self.w + x0) * 3
+            self.buf[off:off + len(stripe)] = stripe
 
     def rule_h(self, x, y, w, c):
         """A 1px horizontal rule."""
@@ -93,20 +101,20 @@ class Pix:
         """Bresenham segment, inclusive of both ends."""
         dx = abs(x1 - x0)
         dy = -abs(y1 - y0)
-        sx = 1 if x0 < x1 else -1
-        sy = 1 if y0 < y1 else -1
+        stepx = 1 if x0 < x1 else -1
+        stepy = 1 if y0 < y1 else -1
         err = dx + dy
         while True:
             self.dot(x0, y0, c)
             if x0 == x1 and y0 == y1:
                 return
-            twice = 2 * err
-            if twice >= dy:
+            dbl = 2 * err
+            if dbl >= dy:
                 err += dy
-                x0 += sx
-            if twice <= dx:
+                x0 += stepx
+            if dbl <= dx:
                 err += dx
-                y0 += sy
+                y0 += stepy
 
     def ball(self, cx, cy, r, c):
         """Filled disc drawn as horizontal scanlines."""
@@ -116,84 +124,83 @@ class Pix:
 
     def tri(self, ax, ay, bx, by, cx, cy, c):
         """Filled triangle, scanline by scanline between its edges."""
-        corners = sorted(((ax, ay), (bx, by), (cx, cy)),
-                         key=lambda p: p[1])
-        (x0, y0), (x1, y1), (x2, y2) = corners
+        pts = sorted(((ax, ay), (bx, by), (cx, cy)), key=lambda p: p[1])
+        (x0, y0), (x1, y1), (x2, y2) = pts
         if y0 == y2:
             return
-        edges = (((x0, y0), (x1, y1)), ((x1, y1), (x2, y2)),
+        sides = (((x0, y0), (x1, y1)), ((x1, y1), (x2, y2)),
                  ((x0, y0), (x2, y2)))
         for y in range(y0, y2 + 1):
-            hits = []
-            for (px, py), (qx, qy) in edges:
+            xs = []
+            for (px, py), (qx, qy) in sides:
                 if py == qy:
                     continue
                 if min(py, qy) <= y <= max(py, qy):
-                    hits.append(px + (qx - px) * (y - py) / (qy - py))
-            if len(hits) >= 2:
-                xa, xb = int(min(hits)), int(max(hits))
+                    xs.append(px + (qx - px) * (y - py) / (qy - py))
+            if len(xs) >= 2:
+                xa, xb = int(min(xs)), int(max(xs))
                 self.rule_h(xa, y, xb - xa + 1, c)
 
 # 5x7 bitmap font, written as seven 5-char rows per glyph: '#' is ink,
 # '.' is blank. All text is rendered in capitals.
 GLYPHS = {
-    "A": ("01110", "10001", "10001", "11111", "10001", "10001", "10001"),
-    "B": ("11110", "10001", "10001", "11110", "10001", "10001", "11110"),
-    "C": ("01110", "10001", "10000", "10000", "10000", "10001", "01110"),
-    "D": ("11110", "10001", "10001", "10001", "10001", "10001", "11110"),
-    "E": ("11111", "10000", "10000", "11110", "10000", "10000", "11111"),
-    "F": ("11111", "10000", "10000", "11110", "10000", "10000", "10000"),
-    "G": ("01110", "10001", "10000", "10111", "10001", "10001", "01111"),
-    "H": ("10001", "10001", "10001", "11111", "10001", "10001", "10001"),
-    "I": ("01110", "00100", "00100", "00100", "00100", "00100", "01110"),
-    "J": ("00111", "00010", "00010", "00010", "00010", "10010", "01100"),
-    "K": ("10001", "10010", "10100", "11000", "10100", "10010", "10001"),
-    "L": ("10000", "10000", "10000", "10000", "10000", "10000", "11111"),
-    "M": ("10001", "11011", "10101", "10101", "10001", "10001", "10001"),
-    "N": ("10001", "11001", "10101", "10011", "10001", "10001", "10001"),
-    "O": ("01110", "10001", "10001", "10001", "10001", "10001", "01110"),
-    "P": ("11110", "10001", "10001", "11110", "10000", "10000", "10000"),
-    "Q": ("01110", "10001", "10001", "10001", "10101", "10010", "01101"),
-    "R": ("11110", "10001", "10001", "11110", "10100", "10010", "10001"),
-    "S": ("01111", "10000", "10000", "01110", "00001", "00001", "11110"),
-    "T": ("11111", "00100", "00100", "00100", "00100", "00100", "00100"),
-    "U": ("10001", "10001", "10001", "10001", "10001", "10001", "01110"),
-    "V": ("10001", "10001", "10001", "10001", "10001", "01010", "00100"),
-    "W": ("10001", "10001", "10001", "10101", "10101", "10101", "01010"),
-    "X": ("10001", "10001", "01010", "00100", "01010", "10001", "10001"),
-    "Y": ("10001", "10001", "01010", "00100", "00100", "00100", "00100"),
-    "Z": ("11111", "00001", "00010", "00100", "01000", "10000", "11111"),
-    "0": ("01110", "10001", "10011", "10101", "11001", "10001", "01110"),
-    "1": ("00100", "01100", "00100", "00100", "00100", "00100", "01110"),
-    "2": ("01110", "10001", "00001", "00010", "00100", "01000", "11111"),
-    "3": ("11111", "00010", "00100", "00010", "00001", "10001", "01110"),
-    "4": ("00010", "00110", "01010", "10010", "11111", "00010", "00010"),
-    "5": ("11111", "10000", "11110", "00001", "00001", "10001", "01110"),
-    "6": ("00110", "01000", "10000", "11110", "10001", "10001", "01110"),
-    "7": ("11111", "00001", "00010", "00100", "01000", "01000", "01000"),
-    "8": ("01110", "10001", "10001", "01110", "10001", "10001", "01110"),
-    "9": ("01110", "10001", "10001", "01111", "00001", "00010", "01100"),
-    " ": (".....", ".....", ".....", ".....", ".....", ".....", "....."),
-    ".": (".....", ".....", ".....", ".....", ".....", ".1100", ".1100"),
-    ",": (".....", ".....", ".....", ".....", ".1100", "..100", ".1000"),
-    ":": (".....", ".1100", ".1100", ".....", ".1100", ".1100", "....."),
-    ";": (".....", ".1100", ".1100", ".....", ".1100", "..100", ".1000"),
-    "!": ("..100", "..100", "..100", "..100", "..100", ".....", "..100"),
-    "?": (".1110", "10001", "00001", "00010", "..100", ".....", "..100"),
-    "'": ("..100", "..100", ".1000", ".....", ".....", ".....", "....."),
-    '"': (".1010", ".1010", ".....", ".....", ".....", ".....", "....."),
-    "-": (".....", ".....", ".....", ".1110", ".....", ".....", "....."),
-    "(": ("...10", "..100", ".1000", ".1000", ".1000", "..100", "...10"),
-    ")": (".1000", "..100", "...10", "...10", "...10", "..100", ".1000"),
-    "/": ("....1", "...10", "...10", "..100", ".1000", ".1000", "10000"),
-    "%": ("11001", "11010", "...10", "..100", ".1000", ".1011", "10011"),
-    "&": (".1100", "10010", "10100", ".1000", "10101", "10010", ".1101"),
-    "+": (".....", "..100", "..100", ".1110", "..100", "..100", "....."),
-    "=": (".....", ".....", ".1110", ".....", ".1110", ".....", "....."),
-    "*": (".....", "10101", ".1110", "10101", ".....", ".....", "....."),
-    "#": (".1010", ".1010", "11111", ".1010", "11111", ".1010", ".1010"),
-    "$": ("..100", ".1111", "10100", ".1110", "..101", "11110", "..100"),
-    "@": (".1110", "10001", "10111", "10101", "10110", "10000", ".1110"),
+    "A": ("01110","10001","10001","11111","10001","10001","10001"),
+    "B": ("11110","10001","10001","11110","10001","10001","11110"),
+    "C": ("01110","10001","10000","10000","10000","10001","01110"),
+    "D": ("11110","10001","10001","10001","10001","10001","11110"),
+    "E": ("11111","10000","10000","11110","10000","10000","11111"),
+    "F": ("11111","10000","10000","11110","10000","10000","10000"),
+    "G": ("01110","10001","10000","10111","10001","10001","01111"),
+    "H": ("10001","10001","10001","11111","10001","10001","10001"),
+    "I": ("01110","00100","00100","00100","00100","00100","01110"),
+    "J": ("00111","00010","00010","00010","00010","10010","01100"),
+    "K": ("10001","10010","10100","11000","10100","10010","10001"),
+    "L": ("10000","10000","10000","10000","10000","10000","11111"),
+    "M": ("10001","11011","10101","10101","10001","10001","10001"),
+    "N": ("10001","11001","10101","10011","10001","10001","10001"),
+    "O": ("01110","10001","10001","10001","10001","10001","01110"),
+    "P": ("11110","10001","10001","11110","10000","10000","10000"),
+    "Q": ("01110","10001","10001","10001","10101","10010","01101"),
+    "R": ("11110","10001","10001","11110","10100","10010","10001"),
+    "S": ("01111","10000","10000","01110","00001","00001","11110"),
+    "T": ("11111","00100","00100","00100","00100","00100","00100"),
+    "U": ("10001","10001","10001","10001","10001","10001","01110"),
+    "V": ("10001","10001","10001","10001","10001","01010","00100"),
+    "W": ("10001","10001","10001","10101","10101","10101","01010"),
+    "X": ("10001","10001","01010","00100","01010","10001","10001"),
+    "Y": ("10001","10001","01010","00100","00100","00100","00100"),
+    "Z": ("11111","00001","00010","00100","01000","10000","11111"),
+    "0": ("01110","10001","10011","10101","11001","10001","01110"),
+    "1": ("00100","01100","00100","00100","00100","00100","01110"),
+    "2": ("01110","10001","00001","00010","00100","01000","11111"),
+    "3": ("11111","00010","00100","00010","00001","10001","01110"),
+    "4": ("00010","00110","01010","10010","11111","00010","00010"),
+    "5": ("11111","10000","11110","00001","00001","10001","01110"),
+    "6": ("00110","01000","10000","11110","10001","10001","01110"),
+    "7": ("11111","00001","00010","00100","01000","01000","01000"),
+    "8": ("01110","10001","10001","01110","10001","10001","01110"),
+    "9": ("01110","10001","10001","01111","00001","00010","01100"),
+    " ": (".....",".....",".....",".....",".....",".....","....."),
+    ".": (".....",".....",".....",".....",".....",".1100",".1100"),
+    ",": (".....",".....",".....",".....",".1100","..100",".1000"),
+    ":": (".....",".1100",".1100",".....",".1100",".1100","....."),
+    ";": (".....",".1100",".1100",".....",".1100","..100",".1000"),
+    "!": ("..100","..100","..100","..100","..100",".....","..100"),
+    "?": (".1110","10001","00001","00010","..100",".....","..100"),
+    "'": ("..100","..100",".1000",".....",".....",".....","....."),
+    '"': (".1010",".1010",".....",".....",".....",".....","....."),
+    "-": (".....",".....",".....",".1110",".....",".....","....."),
+    "(": ("...10","..100",".1000",".1000",".1000","..100","...10"),
+    ")": (".1000","..100","...10","...10","...10","..100",".1000"),
+    "/": ("....1","...10","...10","..100",".1000",".1000","10000"),
+    "%": ("11001","11010","...10","..100",".1000",".1011","10011"),
+    "&": (".1100","10010","10100",".1000","10101","10010",".1101"),
+    "+": (".....","..100","..100",".1110","..100","..100","....."),
+    "=": (".....",".....",".1110",".....",".1110",".....","....."),
+    "*": (".....","10101",".1110","10101",".....",".....","....."),
+    "#": (".1010",".1010","11111",".1010","11111",".1010",".1010"),
+    "$": ("..100",".1111","10100",".1110","..101","11110","..100"),
+    "@": (".1110","10001","10111","10101","10110","10000",".1110"),
 }
 
 
@@ -204,16 +211,16 @@ def text_w(s, scale):
 
 def put_text(pg, x, y, s, scale, color):
     """Draw capitals text; a glyph we do not know is a blank advance."""
-    cx = x
+    pen = x
     for ch in s.upper():
         rows = GLYPHS.get(ch)
         if rows is not None:
             for r, line in enumerate(rows):
                 for col, bit in enumerate(line):
                     if bit == "1":
-                        pg.box(cx + col * scale, y + r * scale,
+                        pg.box(pen + col * scale, y + r * scale,
                                scale, scale, color)
-        cx += 6 * scale
+        pen += 6 * scale
 
 
 def put_text_c(pg, cx, y, s, scale, color):
@@ -235,210 +242,217 @@ def put_bold_c(pg, cx, y, s, scale, color):
 def put_mixed_c(pg, cx, y, parts, scale):
     """Draw [(text, color), ...] as one centred line, e.g. red numbers
     with ink labels for the stat strip."""
-    total = 0
+    width = 0
     for t, _ in parts:
-        total += text_w(t, scale)
-    x = cx - total // 2
+        width += text_w(t, scale)
+    pen = cx - width // 2
     for t, color in parts:
-        put_text(pg, x, y, t, scale, color)
-        x += text_w(t, scale)
+        put_text(pg, pen, y, t, scale, color)
+        pen += text_w(t, scale)
 
 
 def wrap(s, max_chars):
     """Greedy word wrap to lines of at most max_chars characters."""
-    lines = []
-    cur = ""
+    out = []
+    line = ""
     for word in s.split(" "):
-        if cur == "":
-            cur = word
-        elif len(cur) + 1 + len(word) <= max_chars:
-            cur = cur + " " + word
+        if line == "":
+            line = word
+        elif len(line) + 1 + len(word) <= max_chars:
+            line = line + " " + word
         else:
-            lines.append(cur)
-            cur = word
-    if cur != "":
-        lines.append(cur)
-    return lines
+            out.append(line)
+            line = word
+    if line != "":
+        out.append(line)
+    return out
 
 # Field colours: the left bar of every grid cell, the lead kickers and
 # the footer legend all use this one mapping.
 FIELDS = {
-    "CONFLICT": (178, 34, 34),
-    "POLITICS": (37, 99, 235),
-    "MARKETS": (180, 130, 29),
-    "SPORT": (124, 58, 237),
-    "SCIENCE": (13, 148, 136),
-    "CULTURE": (219, 39, 119),
-    "CRIME": (100, 116, 139),
-    "DISASTER": (146, 64, 14),
-    "WEATHER": (2, 132, 199),
-    "CLIMATE": (22, 163, 74),
-    "MEDIA": (190, 24, 93),
-    "WORLD": (75, 85, 99),
+    "CONFLICT": (178,34,34),
+    "POLITICS": (37,99,235),
+    "MARKETS": (180,130,29),
+    "SPORT": (124,58,237),
+    "SCIENCE": (13,148,136),
+    "CULTURE": (219,39,119),
+    "CRIME": (100,116,139),
+    "DISASTER": (146,64,14),
+    "WEATHER": (2,132,199),
+    "CLIMATE": (22,163,74),
+    "MEDIA": (190,24,93),
+    "WORLD": (75,85,99),
 }
 
 # The three leads: the day's most consequential stories, plus one quiet
 # moment. All first reported Tuesday 24 November 2026; see
-# NEWS-RESEARCH.md in the workdir.
-LEADS = [
-    ("LEAD 1 - MARKETS - NVIDIA",
-     "MARKETS",
-     "HUANG BACK AT NVIDIA",
-     "SHARES +30%, NASDAQ +6.8%"),
-    ("LEAD 2 - CONFLICT - LIBYA",
-     "CONFLICT",
-     "UKRAINE SINKS RUSSIAN SHIP",
-     "MERKURY ABLAZE AT BENGHAZI"),
-    ("LEAD 3 - WORLD - DYMER",
-     "WORLD",
-     "CAT DYM SURVIVES",
-     "ALIVE AFTER DAYS IN RUBBLE"),
-]
+# NEWS-RESEARCH.md in the workdir. Each lead is (kicker, field,
+# headline, sub-line) — lead 1 carries a second sub-line.
+LEAD1 = ("LEAD 1 - MARKETS - NVIDIA","MARKETS","HUANG BACK AT NVIDIA","SHARES +30%, NASDAQ +6.8%","11 DAYS AFTER HE QUIT")
+LEAD2 = ("LEAD 2 - CONFLICT - LIBYA","CONFLICT","UKRAINE SINKS RUSSIAN SHIP","MERKURY ABLAZE AT BENGHAZI")
+LEAD3 = ("LEAD 3 - WORLD - DYMER","WORLD","CAT DYM SURVIVES","ALIVE AFTER DAYS IN RUBBLE")
 
-# The dense grid: 57 more stories, (headline, field). Every headline is
-# ONE line of at most 25 characters — the renderer draws one scale-2 line
-# per 26px cell, so nothing wraps or overlaps. All first reported
+# The grid: 45 stories in four rhythm groups. Each group holds a
+# multiple of three stories, so no row is left half-empty, and each
+# cell is (field, headline) — field first, so the renderer colours
+# the bar before it draws the text. Every headline is ONE line of
+# at most 25 characters: the renderer draws one bold scale-2 line
+# per 25px cell, so nothing wraps or overlaps. All first reported
 # 24 Nov 2026; see NEWS-RESEARCH.md in the workdir.
-GRID = [
-    ("KREMLIN PLANS SPACE NUKES", "CONFLICT"),
-    ("153 DRONES HIT UKRAINE", "CONFLICT"),
-    ("ODESA LOSES POWER, HEAT", "CONFLICT"),
-    ("EU SANCTIONS RUSSIA ANEW", "CONFLICT"),
-    ("UKRAINE HITS 2 REFINERIES", "CONFLICT"),
-    ("RUSSIA CASUALTIES SOAR", "CONFLICT"),
-    ("MERZ PRESSES KREMLIN", "CONFLICT"),
-    ("NATO INCURSIONS RISE", "CONFLICT"),
-    ("GARRISON NEAR FINLAND", "CONFLICT"),
-    ("DYMER TOLL NOW 11 DEAD", "CONFLICT"),
-    ("TRUMP BLAMES VOTERS", "POLITICS"),
-    ("IRAN VOWS ALL MEANS", "POLITICS"),
-    ("TRUMP EYES IRAN IN 2027", "POLITICS"),
-    ("CALIFORNIA DEM QUITS", "POLITICS"),
-    ("EU LISTS US NEO-NAZI", "POLITICS"),
-    ("HASINA ARREST VOW", "POLITICS"),
-    ("ARMENIA NEW CHARTER", "POLITICS"),
-    ("KOREA PICKS NEW FM", "POLITICS"),
-    ("INDIA, NEPAL SIGN 8 MOUS", "POLITICS"),
-    ("MODI, SHAH FLAG TRAIN", "POLITICS"),
-    ("YUNUS SLAMS GRAMEEN HIT", "POLITICS"),
-    ("TRUMP TARGETS NEWSOM", "POLITICS"),
-    ("SYRIA DEMINING MISSION", "POLITICS"),
-    ("FAR RIGHT EYES EU SHAKE", "POLITICS"),
-    ("NASDAQ +6.8% IN REBOUND", "MARKETS"),
-    ("CROWDSTRIKE BUYS ZSCALER", "MARKETS"),
-    ("BRENT BELOW $90", "MARKETS"),
-    ("GOLD REBOUNDS TO $3,657", "MARKETS"),
-    ("STOXX +1.9%, DAX +2%", "MARKETS"),
-    ("CHINA STOCKS 16-MO LOW", "MARKETS"),
-    ("WALL ST $80.6BN WARNING", "MARKETS"),
-    ("MANILA SEEKS TARIFF CUT", "MARKETS"),
-    ("DELL, HP REPORT TODAY", "MARKETS"),
-    ("SPICEJET IN CRISIS", "MARKETS"),
-    ("INDIA OIL BILL +60%", "MARKETS"),
-    ("BOE: ACT ON INFLATION", "MARKETS"),
-    ("US SEIZES $1.1BN CRYPTO", "CRIME"),
-    ("FSB PHISHES JOURNALISTS", "CRIME"),
-    ("CHINA SPY SECRETS DEATH", "CRIME"),
-    ("MEZA ARREST POWER GAP", "CRIME"),
-    ("FBI HACKED AGAIN", "CRIME"),
-    ("UK AI BREAST TEST FIRST", "SCIENCE"),
-    ("UN SEEKS AI SAFETY RULES", "SCIENCE"),
-    ("AI WEAPONS TALKS FAIL", "SCIENCE"),
-    ("US-CHINA AI RACE GROWS", "SCIENCE"),
-    ("INDIA-NZ TEST IN A DRAW", "SPORT"),
-    ("PANT 128, RECORD TON", "SPORT"),
-    ("ALCARAZ WINS ATP FINALS", "SPORT"),
-    ("GUKESH DEFENDS CROWN", "SPORT"),
-    ("JAVA FIRE: 24 BODIES OUT", "DISASTER"),
-    ("GAZA TOXINS FEARED", "WORLD"),
-    ("UNRWA STAFF KILLED", "WORLD"),
-    ("TALIBAN ERASES WOMEN", "WORLD"),
-    ("DELTA GLITCH HITS 1,600", "WORLD"),
-    ("US ATC UNIT FOR HOLIDAY", "WORLD"),
-    ("LISBON MARCHES ON PRICES", "WORLD"),
-    ("FERRARI UNVEILS 296 DUO", "CULTURE"),
+GROUPS = [
+    ("CONFLICT - 9 STORIES", "CONFLICT", [
+        ("CONFLICT", "KREMLIN PLANS SPACE NUKES"),
+        ("CONFLICT", "153 DRONES HIT UKRAINE"),
+        ("CONFLICT", "ODESA LOSES POWER, HEAT"),
+        ("CONFLICT", "EU SANCTIONS RUSSIA ANEW"),
+        ("CONFLICT", "UKRAINE HITS 2 REFINERIES"),
+        ("CONFLICT", "RUSSIA CASUALTIES SOAR"),
+        ("CONFLICT", "MERZ PRESSES KREMLIN"),
+        ("CONFLICT", "NATO INCURSIONS RISE"),
+        ("CONFLICT", "DYMER TOLL NOW 11 DEAD"),
+    ]),
+    ("POLITICS - 12 STORIES", "POLITICS", [
+        ("POLITICS", "TRUMP BLAMES VOTERS"),
+        ("POLITICS", "IRAN VOWS ALL MEANS"),
+        ("POLITICS", "TRUMP EYES IRAN IN 2027"),
+        ("POLITICS", "CALIFORNIA DEM QUITS"),
+        ("POLITICS", "EU LISTS US NEO-NAZI"),
+        ("POLITICS", "HASINA ARREST VOW"),
+        ("POLITICS", "ARMENIA NEW CHARTER"),
+        ("POLITICS", "KOREA PICKS NEW FM"),
+        ("POLITICS", "INDIA, NEPAL SIGN 8 MOUS"),
+        ("POLITICS", "MODI, SHAH FLAG TRAIN"),
+        ("POLITICS", "YUNUS SLAMS GRAMEEN HIT"),
+        ("POLITICS", "TRUMP TARGETS NEWSOM"),
+    ]),
+    ("MARKETS - 9 STORIES", "MARKETS", [
+        ("MARKETS", "NASDAQ +6.8% IN REBOUND"),
+        ("MARKETS", "CROWDSTRIKE BUYS ZSCALER"),
+        ("MARKETS", "BRENT BELOW $90"),
+        ("MARKETS", "GOLD REBOUNDS TO $3,657"),
+        ("MARKETS", "STOXX +1.9%, DAX +2%"),
+        ("MARKETS", "CHINA STOCKS 16-MO LOW"),
+        ("MARKETS", "WALL ST $80.6BN WARNING"),
+        ("MARKETS", "INDIA OIL BILL +60%"),
+        ("MARKETS", "BOE: ACT ON INFLATION"),
+    ]),
+    ("WORLD, CRIME, SCIENCE + SPORT - 15 STORIES", "WORLD", [
+        ("CRIME", "US SEIZES $1.1BN CRYPTO"),
+        ("CRIME", "FSB PHISHES JOURNALISTS"),
+        ("CRIME", "CHINA SPY SECRETS DEATH"),
+        ("SCIENCE", "UK AI BREAST TEST FIRST"),
+        ("SCIENCE", "UN SEEKS AI SAFETY RULES"),
+        ("SCIENCE", "AI WEAPONS TALKS FAIL"),
+        ("SCIENCE", "US-CHINA AI RACE GROWS"),
+        ("SPORT", "INDIA-NZ TEST IN A DRAW"),
+        ("SPORT", "PANT 128, RECORD TON"),
+        ("SPORT", "ALCARAZ WINS ATP FINALS"),
+        ("SPORT", "GUKESH DEFENDS CROWN"),
+        ("DISASTER", "JAVA FIRE: 24 BODIES OUT"),
+        ("WORLD", "GAZA TOXINS FEARED"),
+        ("WORLD", "UNRWA STAFF KILLED"),
+        ("WORLD", "TALIBAN ERASES WOMEN"),
+    ]),
 ]
 
-# Ten moments of the day, WIB (UTC+7), in the order they were first
-# reported on 24 November 2026.
+# Ten moments of the day, UTC — the spine. Every moment falls inside
+# 24 Nov 00:00-23:59 UTC: the salonvision digests published in the
+# first two hours of Tuesday UTC. v1's list was WIB, so its first
+# moments were really Monday night UTC — the wrong day. Each entry
+# is (UTC time, short label); times are pinned to the reporting
+# digests listed in NEWS-RESEARCH.md.
 TIMELINE = [
-    ("03:00", "HUANG BACK AT NVIDIA"),
-    ("04:00", "NASDAQ +6.8% REBOUND"),
-    ("07:05", "EU SANCTIONS RUSSIA"),
-    ("07:12", "TRUMP BLAMES VOTERS"),
-    ("07:14", "KREMLIN SPACE NUKES"),
-    ("07:18", "JAVA FIRE: 24 BODIES"),
-    ("07:19", "MERKURY SUNK IN LIBYA"),
-    ("07:30", "FAR RIGHT EYES EU"),
-    ("07:38", "CAT DYM SURVIVES"),
-    ("07:45", "UKRAINE HITS FREIGHTER"),
+    ("00:05","EU SANCTIONS"),
+    ("00:12","TRUMP BLAMES VOTERS"),
+    ("00:14","KREMLIN SPACE NUKES"),
+    ("00:18","JAVA FIRE: 24 BODIES"),
+    ("00:19","MERKURY SUNK IN LIBYA"),
+    ("00:30","FAR RIGHT EYES EU"),
+    ("00:38","CAT DYM SURVIVES"),
+    ("00:45","UKRAINE HITS FREIGHTER"),
+    ("01:05","DYMER TOLL NOW 11"),
+    ("01:14","US SEIZES $1.1BN"),
 ]
 
-def art_chart_up(pg, x, y, w, h):
-    """A market board snapping back up: a climbing green line across
-    gridlines, for Nvidia's rebound after Huang's return."""
+def art_chart_hero(pg, x, y, w, h):
+    """The hero market board, drawn big: a red dip, then a green
+    climb to the top-right corner for Nvidia's rebound after
+    Huang's return. Thick lines and gold dots so it reads at 512px."""
     pg.box(x, y, w, h, (14, 26, 20))
     for gy in range(y + 12, y + h, 14):
         pg.rule_h(x + 8, gy, w - 16, (30, 52, 40))
-    climb = [(10, 78), (52, 72), (94, 76), (136, 60), (178, 46),
-             (220, 32), (258, 22), (296, 12)]
+    dip = [(12, 58), (62, 86)]
+    for (ax, ay), (bx, by) in zip(dip, dip[1:]):
+        for off in (0, 1, 2):
+            pg.seg(x + ax, y + ay + off, x + bx, y + by + off,
+                   (255, 80, 70))
+    climb = [(62, 86), (112, 80), (162, 84), (212, 64), (262, 48),
+             (312, 30), (352, 18), (388, 8)]
     for (ax, ay), (bx, by) in zip(climb, climb[1:]):
-        pg.seg(x + ax, y + ay, x + bx, y + by, (60, 220, 130))
-        pg.seg(x + ax, y + ay + 1, x + bx, y + by + 1, (60, 220, 130))
+        for off in (0, 1, 2):
+            pg.seg(x + ax, y + ay + off, x + bx, y + by + off,
+                   (60, 220, 130))
     for px, py in climb:
-        pg.ball(x + px, y + py, 2, (255, 210, 90))
-    pg.tri(x + 298, y + 12, x + 312, y + 12, x + 305, y + 26,
+        pg.ball(x + px, y + py, 3, (255, 210, 90))
+    pg.tri(x + 378, y + 8, x + 394, y + 8, x + 386, y + 24,
            (60, 220, 130))
-    pg.box(x + 12, y + 8, 4, 4, (255, 210, 90))
+    pg.box(x + 12, y + 8, 5, 5, (255, 210, 90))
 
 
 def art_ship(pg, x, y, w, h):
-    """A Russian corvette ablaze in a Libyan port at night: hull, flames
-    licking the deck and black smoke rolling up, for the Merkury strike."""
+    """A Russian corvette ablaze in a Libyan port at night, redrawn
+    with a long readable hull: grey hull, red deck line, a mast,
+    three tall flames and smoke, for the Merkury strike."""
     pg.box(x, y, w, h, (10, 18, 38))
-    for wy in range(y + 54, y + h, 8):
+    for wy in range(y + 46, y + h, 7):
         pg.rule_h(x, wy, w, (16, 34, 64))
-    pg.box(x + 36, y + 46, 224, 20, (40, 44, 54))
-    pg.box(x + 36, y + 42, 224, 4, (150, 40, 30))
-    pg.box(x + 256, y + 24, 26, 22, (60, 64, 74))
-    flames = ((66, 32), (118, 42), (168, 30), (214, 36))
-    for fx, fh in flames:
-        pg.tri(x + fx, y + 44, x + fx + 11, y + 44 - fh,
-               x + fx + 22, y + 44, (255, 120, 30))
-        pg.tri(x + fx + 5, y + 44, x + fx + 11, y + 44 - fh + 12,
-               x + fx + 17, y + 44, (255, 210, 90))
-    smoke = ((106, 8, 10), (178, 4, 12), (238, 10, 8))
-    for sx, sy, sr in smoke:
+    pg.box(x + 48, y + 38, 340, 18, (40, 44, 54))
+    pg.tri(x + 388, y + 38, x + 432, y + 38, x + 388, y + 56,
+           (40, 44, 54))
+    pg.box(x + 48, y + 34, 340, 4, (150, 40, 30))
+    pg.box(x + 300, y + 18, 44, 16, (60, 64, 74))
+    pg.rule_v(x + 322, y + 6, 12, (120, 124, 134))
+    for fx, fh in ((80, 30), (150, 38), (220, 28)):
+        pg.tri(x + fx, y + 34, x + fx + 12, y + 34 - fh,
+               x + fx + 24, y + 34, (255, 120, 30))
+        pg.tri(x + fx + 6, y + 34, x + fx + 12, y + 34 - fh + 13,
+               x + fx + 18, y + 34, (255, 210, 90))
+    for sx, sy, sr in ((110, 8, 9), (190, 4, 11), (260, 10, 8)):
         pg.ball(x + sx, y + sy, sr, (70, 66, 62))
-    pg.ball(x + 302, y + 32, 3, (255, 210, 60))
+    pg.ball(x + 448, y + 12, 3, (255, 210, 60))
 
 
 def art_cat(pg, x, y, w, h):
-    """A small cat found alive in the rubble: grey slabs, a dark cat
-    silhouette with pricked ears in a shaft of light, for Dym of Dymer."""
-    pg.box(x, y, w, h, (38, 36, 34))
-    pg.box(x + 18, y + 58, 122, 14, (90, 86, 80))
-    pg.box(x + 152, y + 64, 138, 12, (110, 104, 96))
-    pg.box(x + 62, y + 72, 88, 10, (70, 66, 60))
-    pg.box(x + 202, y + 72, 68, 10, (80, 76, 70))
-    for lx in (142, 152, 162):
-        pg.rule_v(x + lx, y + 6, 62, (255, 220, 130))
-    pg.box(x + 140, y + 46, 26, 22, (24, 22, 20))
-    pg.tri(x + 142, y + 46, x + 146, y + 36, x + 150, y + 46,
+    """A cat found alive in the rubble — redrawn LIGHT, the v1 fix.
+    v1 put a dark cat on a dark slab and it read as a black blob.
+    Here pale rubble and a shaft of light carry a big black cat
+    silhouette with pricked ears and gold eyes, for Dym of Dymer."""
+    pg.box(x, y, w, h, RUBBLE)
+    beam_x, beam_w = x + 196, 76
+    pg.box(beam_x, y, beam_w, h, (255, 226, 140))
+    pg.box(x + 20, y + 40, 150, 12, SLAB)
+    pg.box(x + 190, y + 46, 160, 10, (170, 160, 140))
+    pg.box(x + 360, y + 38, 100, 12, SLAB)
+    pg.box(x + 90, y + 52, 120, 8, (130, 120, 104))
+    pg.box(x + 300, y + 54, 90, 8, (150, 140, 122))
+    pg.box(x + 40, y + 58, 60, 6, (110, 100, 86))
+    body_x, body_y = x + 192, y + 26
+    pg.box(body_x, body_y, 92, 28, (24, 22, 20))
+    head_x, head_y = x + 280, y + 30
+    pg.ball(head_x, head_y, 14, (24, 22, 20))
+    pg.tri(x + 268, y + 24, x + 273, y + 10, x + 278, y + 24,
            (24, 22, 20))
-    pg.tri(x + 158, y + 46, x + 162, y + 36, x + 166, y + 46,
+    pg.tri(x + 282, y + 24, x + 287, y + 10, x + 292, y + 24,
            (24, 22, 20))
-    pg.ball(x + 148, y + 54, 2, (255, 210, 90))
-    pg.ball(x + 160, y + 54, 2, (255, 210, 90))
-    pg.box(x + 132, y + 68, 44, 4, (24, 22, 20))
-    pg.ball(x + 302, y + 14, 3, (255, 210, 90))
-
-
-ART = [art_chart_up, art_ship, art_cat]
+    pg.ball(x + 274, y + 28, 2, (255, 210, 90))
+    pg.ball(x + 286, y + 28, 2, (255, 210, 90))
+    for dy in (0, 1, 2):
+        pg.seg(x + 192, y + 42 + dy, x + 168, y + 22 + dy, (24, 22, 20))
+    pg.ball(x + 448, y + 12, 3, (255, 210, 60))
 
 
 def _lcg_next(state):
-    """One step of the fixed-seed linear congruential generator."""
+    """Advance the fixed-seed generator one step (glibc constants)."""
     return (1103515245 * state + 12345) & 0x7FFFFFFF
 
 
@@ -451,33 +465,32 @@ def grain(pg):
     paper compresses to almost nothing, grain does not.
     """
     buf = pg.buf
-    state = 135791113
-    total = len(buf)
-    i = 0
-    while i < total:
-        light = buf[i] >= 200 and buf[i + 1] >= 200 and buf[i + 2] >= 200
-        if light:
+    state = 246813579
+    for i in range(0, len(buf), 3):
+        if buf[i] < 200 or buf[i + 1] < 200 or buf[i + 2] < 200:
+            continue
+        state = _lcg_next(state)
+        if state % 100 >= 60:
+            continue
+        for ch in range(3):
             state = _lcg_next(state)
-            if state % 100 < 60:
-                for ch in range(3):
-                    state = _lcg_next(state)
-                    delta = (state >> 23) % 11 - 5
-                    value = buf[i + ch] + delta
-                    if value < 0:
-                        value = 0
-                    elif value > 255:
-                        value = 255
-                    buf[i + ch] = value
-        i += 3
+            delta = (state >> 23) % 11 - 5
+            value = buf[i + ch] + delta
+            if value < 0:
+                value = 0
+            elif value > 255:
+                value = 255
+            buf[i + ch] = value
 
-
+# Layout constants: the page is divided into masthead, hero lead,
+# second lead row, grouped grid, UTC spine and footer.
 MASTHEAD_H = 92
-LEAD_Y = 124
-LEAD_H = 206
-LEAD_W = 328
-LEAD_GAP = 336
-GRID_Y = 354
-GRID_ROW_H = 26
+HERO_Y = 124
+HERO_H = 132
+ROW2_Y = 264
+ROW2_H = 132
+GRID_Y = 404
+GRID_ROW_H = 25
 GRID_COL_W = 338
 GRID_CELL_W = 330
 
@@ -490,93 +503,123 @@ def render():
     put_text_c(pg, W // 2, 8, "THE WORLD IN ONE IMAGE", 2, WHITE)
     put_bold_c(pg, W // 2, 30, "TUESDAY 24 NOVEMBER 2026", 5, WHITE)
     put_text_c(pg, W // 2, 74,
-               "60 STORIES - ALL FIRST REPORTED TUESDAY 24 NOVEMBER 2026",
+               "48 STORIES - ALL FIRST REPORTED TUESDAY 24 NOVEMBER 2026",
                1, PALE)
     pg.box(0, MASTHEAD_H, W, 6, RED)
     # Stat strip: honest counts from this page, red numbers on paper.
     pg.rule_h(0, 98, W, EDGE)
-    stats = [("60", RED), (" STORIES   ", INK), ("3", RED),
+    stats = [("48", RED), (" STORIES   ", INK), ("3", RED),
              (" LEADS   ", INK), ("10", RED), (" MOMENTS   ", INK),
-             ("9", RED), (" FIELDS   ", INK),
+             ("8", RED), (" FIELDS   ", INK),
              ("24 NOV", RED), (" 2026", INK)]
     put_mixed_c(pg, W // 2, 106, stats, 2)
     pg.rule_h(0, 123, W, EDGE)
-    # Three lead panels: taller art, bold headlines, roomier sub-lines.
-    for i, (kicker, field, head, sub) in enumerate(LEADS):
-        px = 8 + i * LEAD_GAP
-        pg.box(px, LEAD_Y, LEAD_W, LEAD_H, WHITE)
-        pg.rule_h(px, LEAD_Y, LEAD_W, EDGE)
-        pg.rule_h(px, LEAD_Y + LEAD_H - 1, LEAD_W, EDGE)
-        pg.rule_v(px, LEAD_Y, LEAD_H, EDGE)
-        pg.rule_v(px + LEAD_W - 1, LEAD_Y, LEAD_H, EDGE)
-        pg.box(px + 1, LEAD_Y + 1, LEAD_W - 2, 24, FIELDS[field])
-        put_bold(pg, px + 10, 132, kicker, 1, WHITE)
-        ART[i](pg, px + 1, 149, 326, 84)
-        for j, ln in enumerate(wrap(head, 17)[:2]):
-            put_bold(pg, px + 10, 239 + j * 26, ln, 3, INK)
-        for j, ln in enumerate(wrap(sub, 25)[:2]):
-            put_text(pg, px + 10, 295 + j * 16, ln, 2, GREY)
-    # Grid section header.
-    put_bold(pg, 8, 336, "MORE FROM THE DAY - 57 STORIES", 2, INK)
-    put_text(pg, 830, 339, "COLOUR = FIELD - LEGEND BELOW", 1, GREY)
-    # Dense grid: 3 columns x 19 rows, ONE line per cell. A single
-    # scale-2 line in a 26px row stays crisp at any size. Headlines
-    # are capped at 25 characters so none wraps or clips.
-    for idx, (head, field) in enumerate(GRID):
-        col, row = idx % 3, idx // 3
-        cx = 8 + col * GRID_COL_W
-        cy = GRID_Y + row * GRID_ROW_H
-        shade = WHITE if row % 2 == 0 else (242, 238, 225)
-        pg.box(cx, cy, GRID_CELL_W, GRID_ROW_H, shade)
-        pg.box(cx, cy, 6, GRID_ROW_H, FIELDS[field])
-        put_text(pg, cx + 13, cy + 6, head, 2, INK)
-    for r in range(20):
-        pg.rule_h(8, GRID_Y + r * GRID_ROW_H, 1008, HAIR)
-    for vx in (340, 678):
-        pg.rule_v(vx, GRID_Y, 494, HAIR)
+    # HERO lead 1: a full-width panel, art on the left, a scale-4
+    # headline on the right — real hierarchy, not three equal leads.
+    kick, fld, head, sub, sub2 = LEAD1
+    pg.box(8, HERO_Y, 1008, HERO_H, WHITE)
+    pg.rule_h(8, HERO_Y, 1008, EDGE)
+    pg.rule_h(8, HERO_Y + HERO_H - 1, 1008, EDGE)
+    pg.rule_v(8, HERO_Y, HERO_H, EDGE)
+    pg.rule_v(1015, HERO_Y, HERO_H, EDGE)
+    pg.box(9, HERO_Y + 1, 1006, 22, FIELDS[fld])
+    put_bold(pg, 18, HERO_Y + 7, kick, 1, WHITE)
+    art_chart_hero(pg, 8, HERO_Y + 22, 400, 110)
+    for j, ln in enumerate(wrap(head, 13)[:2]):
+        put_bold(pg, 420, HERO_Y + 30 + j * 32, ln, 4, INK)
+    put_text(pg, 420, HERO_Y + 98, sub, 2, GREY)
+    put_text(pg, 420, HERO_Y + 114, sub2, 2, GREY)
+    # Leads 2 and 3: half-width panels, one bold scale-3 headline
+    # line each, so nothing wraps small.
+    for i, (kick, fld, head, sub) in enumerate((LEAD2, LEAD3)):
+        px = 8 + i * 512
+        pg.box(px, ROW2_Y, 496, ROW2_H, WHITE)
+        pg.rule_h(px, ROW2_Y, 496, EDGE)
+        pg.rule_h(px, ROW2_Y + ROW2_H - 1, 496, EDGE)
+        pg.rule_v(px, ROW2_Y, ROW2_H, EDGE)
+        pg.rule_v(px + 495, ROW2_Y, ROW2_H, EDGE)
+        pg.box(px + 1, ROW2_Y + 1, 494, 22, FIELDS[fld])
+        put_bold(pg, px + 10, ROW2_Y + 7, kick, 1, WHITE)
+        if i == 0:
+            art_ship(pg, px + 8, ROW2_Y + 22, 480, 64)
+        else:
+            art_cat(pg, px + 8, ROW2_Y + 22, 480, 64)
+        put_bold(pg, px + 10, ROW2_Y + 90, head, 3, INK)
+        put_text(pg, px + 10, ROW2_Y + 114, sub, 2, GREY)
+    # Grid in four rhythm groups: a subhead bar, then three columns
+    # of one-line bold cells. Group sizes are multiples of three, so
+    # every row is full and the wall of text breaks into four beats.
+    gy = GRID_Y
+    for title, fld, items in GROUPS:
+        pg.box(8, gy, 1008, 18, (232, 228, 214))
+        pg.box(8, gy, 8, 18, FIELDS[fld])
+        put_bold(pg, 24, gy + 2, title, 2, INK)
+        rows = (len(items) + 2) // 3
+        for idx, (cell_fld, head) in enumerate(items):
+            col, row = idx % 3, idx // 3
+            cx = 8 + col * GRID_COL_W
+            cy = gy + 18 + row * GRID_ROW_H
+            shade = WHITE if row % 2 == 0 else (242, 238, 225)
+            pg.box(cx, cy, GRID_CELL_W, GRID_ROW_H, shade)
+            pg.box(cx, cy, 6, GRID_ROW_H, FIELDS[cell_fld])
+            put_bold(pg, cx + 13, cy + 5, head, 2, INK)
+        gy += 18 + rows * GRID_ROW_H
+    bottom = gy
     pg.rule_h(8, GRID_Y, 1008, EDGE)
-    pg.rule_h(8, 847, 1008, EDGE)
-    pg.rule_v(8, GRID_Y, 494, EDGE)
-    pg.rule_v(1015, GRID_Y, 494, EDGE)
-    # Timeline: ten moments, times in WIB, bold red times.
-    put_bold(pg, 8, 856, "THE DAY IN TEN MOMENTS - TIMES IN WIB", 2, INK)
-    pg.rule_h(8, 870, 1008, HAIR)
+    pg.rule_h(8, bottom, 1008, EDGE)
+    pg.rule_v(8, GRID_Y, bottom - GRID_Y, EDGE)
+    pg.rule_v(1015, GRID_Y, bottom - GRID_Y, EDGE)
+    for vx in (340, 678):
+        pg.rule_v(vx, GRID_Y, bottom - GRID_Y, HAIR)
+    # UTC timeline spine: a ruled axis with ten moments, labels
+    # alternating above and below the line. The spine makes the
+    # day's arc visible at a glance and proves the UTC discipline.
+    put_bold(pg, 8, 858, "THE DAY, HOUR BY HOUR - IN UTC", 2, INK)
+    pg.box(30, 917, 964, 2, INK)
     for idx, (when, what) in enumerate(TIMELINE):
-        col, row = idx % 2, idx // 2
-        tx = 8 + col * 508
-        ty = 874 + row * 18
-        put_bold(pg, tx, ty + 2, when, 2, RED)
-        put_text(pg, tx + 96, ty + 2, what, 2, INK)
-    # Footer: date check, legend, sources, faithfulness note.
+        tx = 90 + idx * 94
+        pg.ball(tx, 918, 4, RED)
+        if idx % 2 == 0:
+            pg.rule_v(tx, 904, 13, INK)
+            put_bold_c(pg, tx, 878, when, 2, RED)
+            put_text_c(pg, tx, 896, what, 1, INK)
+        else:
+            pg.rule_v(tx, 922, 8, INK)
+            put_bold_c(pg, tx, 932, when, 2, RED)
+            put_text_c(pg, tx, 950, what, 1, INK)
+    # Footer: date check, legend, sources, faithfulness note. The
+    # strings are built from parts so each line stays short.
     pg.box(0, 966, W, 2, RED)
     pg.box(0, 968, W, 56, NAVY)
-    date_line = ("DATE CHECK: TUESDAY 24 NOVEMBER 2026 - 60 STORIES, "
-                 "ALL FIRST REPORTED 24 NOV 2026")
-    put_bold_c(pg, W // 2, 976, date_line, 2, GOLD)
-    legend = ("RED CONFLICT - BLUE POLITICS - GOLD MARKETS - PURPLE SPORT - "
-              "TEAL SCIENCE - PINK CULTURE - SLATE CRIME - BROWN DISASTER - "
-              "GREY WORLD")
-    put_text_c(pg, W // 2, 992, legend, 1, WHITE)
-    sources = ("SOURCES: SALONVISION - KIMKJ - JAGRANJOSH - EDUCATION TIMES - "
-               "OBSERVERVOICE - DISCLOSURE NEWS - STUDMENTOR")
-    put_text_c(pg, W // 2, 1002, sources, 1, PALE)
-    note = ("DRAWN ONLY FROM REPORTS PUBLISHED 24 NOV 2026 IN ANY TIME ZONE - "
-            "NOTHING INVENTED, NOTHING SPECULATED AS FACT")
-    put_text_c(pg, W // 2, 1012, note, 1, PALE)
+    check_txt = "DATE CHECK: TUESDAY 24 NOVEMBER 2026 - 48 STORIES, "
+    check_txt += "ALL FIRST REPORTED 24 NOV 2026"
+    put_bold_c(pg, W // 2, 976, check_txt, 2, GOLD)
+    legend_txt = ("RED CONFLICT - BLUE POLITICS - GOLD MARKETS - "
+                  "PURPLE SPORT - TEAL SCIENCE - SLATE CRIME - "
+                  "BROWN DISASTER - GREY WORLD")
+    put_text_c(pg, W // 2, 992, legend_txt, 1, WHITE)
+    src_txt = ("SOURCES: SALONVISION - KIMKJ - JAGRANJOSH - "
+               "EDUCATION TIMES - OBSERVERVOICE - DISCLOSURE NEWS - "
+               "STUDMENTOR")
+    put_text_c(pg, W // 2, 1002, src_txt, 1, PALE)
+    note_txt = ("DRAWN ONLY FROM REPORTS PUBLISHED 24 NOV 2026 IN ANY "
+                "TIME ZONE - NOTHING INVENTED, NOTHING SPECULATED "
+                "AS FACT")
+    put_text_c(pg, W // 2, 1012, note_txt, 1, PALE)
     grain(pg)
     return pg
 
 
 def main():
     """Render the page and write entry.png to the output directory."""
-    out = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
-    os.makedirs(out, exist_ok=True)
-    data = png_bytes(W, H, render().buf)
-    target = os.path.join(out, "entry.png")
-    with open(target, "wb") as f:
-        f.write(data)
+    outdir = os.environ.get("MAKEFUN_OUTPUT_DIR", "/output")
+    os.makedirs(outdir, exist_ok=True)
+    page = render()
+    data = png_bytes(W, H, page.buf)
+    dest = os.path.join(outdir, "entry.png")
+    with open(dest, "wb") as handle:
+        handle.write(data)
 
 
 if __name__ == "__main__":
     main()
-
